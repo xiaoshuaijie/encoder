@@ -1,19 +1,23 @@
 # Encoder
 
-Thread-owned four-wheel quadrature encoder sampler for MSPM0.
+Thread-owned, platform-independent four-wheel quadrature encoder sampler.
 
 The GPIO callbacks perform four-times quadrature decoding. A dedicated high
-priority thread takes a coherent four-wheel snapshot and publishes the
+priority thread takes a four-wheel snapshot and publishes the
 converted motor data without depending on `ApplicationManager::MonitorAll()`.
 
 ## Hardware Mapping
 
-The module uses the SysConfig pin group `encoder_jie`:
+The board layer must register eight `LibXR::GPIO` entries in the hardware
+container:
 
-- front left: `FLA`, `FLB`
-- front right: `FRA`, `FRB`
-- back left: `BLA`, `BLB`
-- back right: `BRA`, `BRB`
+- front left: `encoder_fl_a`, `encoder_fl_b`
+- front right: `encoder_fr_a`, `encoder_fr_b`
+- back left: `encoder_bl_a`, `encoder_bl_b`
+- back right: `encoder_br_a`, `encoder_br_b`
+
+The MSPM0 application maps these aliases to the `encoder_jie` SysConfig pins;
+other platforms can provide any `LibXR::GPIO` implementation.
 
 ## Published Topic
 

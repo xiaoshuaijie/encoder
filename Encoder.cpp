@@ -15,6 +15,11 @@ namespace
 
 using WheelCounts = std::array<int32_t, Encoder::kMotorCount>;
 
+LibXR::GPIO& FindGPIO(LibXR::HardwareContainer& hw, const char* name)
+{
+  return *hw.FindOrExit<LibXR::GPIO>({name});
+}
+
 struct EncoderKinematics
 {
   std::array<double, Encoder::kMotorCount> angle_rad{};
@@ -72,27 +77,13 @@ EncoderKinematics BuildKinematics(
   return sample;
 }
 
-class InterruptGuard
-{
- public:
-  InterruptGuard() : primask_(__get_PRIMASK()) { __disable_irq(); }
-  InterruptGuard(const InterruptGuard&) = delete;
-  InterruptGuard& operator=(const InterruptGuard&) = delete;
-  ~InterruptGuard() { __set_PRIMASK(primask_); }
-
- private:
-  uint32_t primask_;
-};
-
 }  // namespace
 
 namespace Module
 {
 
-QuadratureDecoder::QuadratureDecoder(GPIO_Regs* a_port, uint32_t a_pin,
-                                     uint32_t a_iomux, GPIO_Regs* b_port,
-                                     uint32_t b_pin, uint32_t b_iomux)
-    : a_(a_port, a_pin, a_iomux), b_(b_port, b_pin, b_iomux)
+QuadratureDecoder::QuadratureDecoder(LibXR::GPIO& a, LibXR::GPIO& b)
+    : a_(a), b_(b)
 {
 }
 
@@ -116,11 +107,14 @@ void QuadratureDecoder::Init()
 
 int32_t QuadratureDecoder::GetCount() const
 {
-  const uint32_t modular_count = count_;
+  const uint32_t modular_count = count_.load(std::memory_order_relaxed);
   return std::bit_cast<int32_t>(modular_count);
 }
 
-void QuadratureDecoder::ResetCount() { count_ = 0U; }
+void QuadratureDecoder::ResetCount()
+{
+  count_.store(0U, std::memory_order_relaxed);
+}
 
 uint8_t QuadratureDecoder::ReadPhase()
 {
@@ -139,11 +133,11 @@ void QuadratureDecoder::OnEdge(bool in_isr, QuadratureDecoder* self)
 
   if (transition > 0)
   {
-    self->count_ = self->count_ + 1U;
+    self->count_.fetch_add(1U, std::memory_order_relaxed);
   }
   else if (transition < 0)
   {
-    self->count_ = self->count_ - 1U;
+    self->count_.fetch_sub(1U, std::memory_order_relaxed);
   }
   self->last_state_ = new_state;
 }
@@ -162,14 +156,10 @@ Encoder::Encoder(LibXR::HardwareContainer& hw,
                  size_t task_stack_depth,
                  LibXR::Thread::Priority thread_priority)
     : decoders_{{
-          {encoder_jie_PORT, encoder_jie_FLA_PIN, encoder_jie_FLA_IOMUX,
-           encoder_jie_PORT, encoder_jie_FLB_PIN, encoder_jie_FLB_IOMUX},
-          {encoder_jie_PORT, encoder_jie_FRA_PIN, encoder_jie_FRA_IOMUX,
-           encoder_jie_PORT, encoder_jie_FRB_PIN, encoder_jie_FRB_IOMUX},
-          {encoder_jie_PORT, encoder_jie_BLA_PIN, encoder_jie_BLA_IOMUX,
-           encoder_jie_PORT, encoder_jie_BLB_PIN, encoder_jie_BLB_IOMUX},
-          {encoder_jie_PORT, encoder_jie_BRA_PIN, encoder_jie_BRA_IOMUX,
-           encoder_jie_PORT, encoder_jie_BRB_PIN, encoder_jie_BRB_IOMUX},
+          {FindGPIO(hw, "encoder_fl_a"), FindGPIO(hw, "encoder_fl_b")},
+          {FindGPIO(hw, "encoder_fr_a"), FindGPIO(hw, "encoder_fr_b")},
+          {FindGPIO(hw, "encoder_bl_a"), FindGPIO(hw, "encoder_bl_b")},
+          {FindGPIO(hw, "encoder_br_a"), FindGPIO(hw, "encoder_br_b")},
       }},
       counts_per_rev_(counts_per_rev),
       publish_period_ms_(publish_period_ms),
@@ -194,7 +184,6 @@ LibXR::Topic& Encoder::DataTopic() { return data_topic_; }
 
 void Encoder::ResetAll()
 {
-  InterruptGuard guard;
   for (auto& decoder : decoders_)
   {
     decoder.ResetCount();
@@ -208,7 +197,6 @@ void Encoder::ResetAll()
 Encoder::WheelCounts Encoder::ReadCounts() const
 {
   WheelCounts counts{};
-  InterruptGuard guard;
   for (size_t wheel = 0U; wheel < decoders_.size(); ++wheel)
   {
     counts[wheel] = decoders_[wheel].GetCount();

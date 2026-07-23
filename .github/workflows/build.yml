@@ -16,7 +16,7 @@ jobs:
       options: --user 0
 
     env:
-      XR_MODULE_NAME: ${{ github.event.repository.name }}
+      XR_MODULE_NAME: Encoder
 
     steps:
       - name: Checkout current module repo to ./Modules/${{ env.XR_MODULE_NAME }}
@@ -43,6 +43,7 @@ jobs:
       - name: Create minimal CMakeLists.txt
         run: |
           cat > CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.20)
           project(xrobot_mod_test CXX)
           set(CMAKE_CXX_STANDARD 20)
           set(CMAKE_CXX_STANDARD_REQUIRED ON)

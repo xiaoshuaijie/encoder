@@ -10,22 +10,30 @@ constructor_args:
   - task_stack_depth: 768
   - thread_priority: LibXR::Thread::Priority::HIGH
 template_args: []
-required_hardware: []
+required_hardware:
+  - encoder_fl_a
+  - encoder_fl_b
+  - encoder_fr_a
+  - encoder_fr_b
+  - encoder_bl_a
+  - encoder_bl_b
+  - encoder_br_a
+  - encoder_br_b
 depends: []
 === END MANIFEST === */
 // clang-format on
 
 #include <array>
+#include <atomic>
 #include <cstddef>
 #include <cstdint>
 #include <optional>
 
 #include "app_framework.hpp"
+#include "gpio.hpp"
 #include "message.hpp"
-#include "mspm0_gpio.hpp"
 #include "thread.hpp"
 #include "timebase.hpp"
-#include "ti_msp_dl_config.h"
 
 namespace Module
 {
@@ -33,8 +41,7 @@ namespace Module
 class QuadratureDecoder
 {
  public:
-  QuadratureDecoder(GPIO_Regs* a_port, uint32_t a_pin, uint32_t a_iomux,
-                    GPIO_Regs* b_port, uint32_t b_pin, uint32_t b_iomux);
+  QuadratureDecoder(LibXR::GPIO& a, LibXR::GPIO& b);
 
   QuadratureDecoder(const QuadratureDecoder&) = delete;
   QuadratureDecoder(QuadratureDecoder&&) = delete;
@@ -52,9 +59,9 @@ class QuadratureDecoder
   static constexpr int8_t kTransitionTable[16] = {
       0, +1, -1, 0, -1, 0, 0, +1, +1, 0, 0, -1, 0, -1, +1, 0};
 
-  LibXR::MSPM0GPIO a_;
-  LibXR::MSPM0GPIO b_;
-  volatile uint32_t count_ = 0U;
+  LibXR::GPIO& a_;
+  LibXR::GPIO& b_;
+  std::atomic<uint32_t> count_{0U};
   uint8_t last_state_ = 0U;
 };
 
