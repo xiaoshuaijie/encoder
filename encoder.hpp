@@ -2,26 +2,121 @@
 
 // clang-format off
 /* === MODULE MANIFEST V2 ===
-module_description: encoder interface module
-constructor_args: []
+module_description: Thread-owned four-wheel quadrature encoder sampler with Topic publishing
+constructor_args:
+  - topic_name: "encoder"
+  - publish_period_ms: 5
+  - counts_per_rev: 1050.0
+  - task_stack_depth: 768
+  - thread_priority: LibXR::Thread::Priority::HIGH
 template_args: []
-required_hardware:
-  - encoder
-  - gpio
+required_hardware: []
 depends: []
 === END MANIFEST === */
 // clang-format on
 
+#include <array>
+#include <cstddef>
+#include <cstdint>
+#include <optional>
+
 #include "app_framework.hpp"
+#include "message.hpp"
+#include "mspm0_gpio.hpp"
+#include "thread.hpp"
+#include "timebase.hpp"
+#include "ti_msp_dl_config.h"
 
-class encoder : public LibXR::Application {
-public:
-  encoder(LibXR::HardwareContainer &hw, LibXR::ApplicationManager &app) {
-    // Hardware initialization example:
-    // auto dev = hw.template Find<LibXR::GPIO>("led");
-  }
+namespace Module
+{
 
+class QuadratureDecoder
+{
+ public:
+  QuadratureDecoder(GPIO_Regs* a_port, uint32_t a_pin, uint32_t a_iomux,
+                    GPIO_Regs* b_port, uint32_t b_pin, uint32_t b_iomux);
+
+  QuadratureDecoder(const QuadratureDecoder&) = delete;
+  QuadratureDecoder(QuadratureDecoder&&) = delete;
+  QuadratureDecoder& operator=(const QuadratureDecoder&) = delete;
+  QuadratureDecoder& operator=(QuadratureDecoder&&) = delete;
+
+  void Init();
+  [[nodiscard]] int32_t GetCount() const;
+  void ResetCount();
+
+ private:
+  uint8_t ReadPhase();
+  static void OnEdge(bool in_isr, QuadratureDecoder* self);
+
+  static constexpr int8_t kTransitionTable[16] = {
+      0, +1, -1, 0, -1, 0, 0, +1, +1, 0, 0, -1, 0, -1, +1, 0};
+
+  LibXR::MSPM0GPIO a_;
+  LibXR::MSPM0GPIO b_;
+  volatile uint32_t count_ = 0U;
+  uint8_t last_state_ = 0U;
+};
+
+}  // namespace Module
+
+class Encoder : public LibXR::Application
+{
+ public:
+  enum MotorId : size_t
+  {
+    kFrontLeft = 0U,
+    kFrontRight,
+    kBackLeft,
+    kBackRight,
+    kMotorCount
+  };
+
+  struct MotorData
+  {
+    std::array<int32_t, kMotorCount> count{};
+    std::array<double, kMotorCount> angle_rad{};
+    std::array<float, kMotorCount> speed_rad_s{};
+    uint32_t sample_time_ms = 0U;
+    uint32_t sequence = 0U;
+  };
+
+  using Sample = MotorData;
+
+  Encoder(LibXR::HardwareContainer& hw, LibXR::ApplicationManager& app,
+          const char* topic_name, uint32_t publish_period_ms,
+          float counts_per_rev, size_t task_stack_depth,
+          LibXR::Thread::Priority thread_priority);
+
+  Encoder(const Encoder&) = delete;
+  Encoder(Encoder&&) = delete;
+  Encoder& operator=(const Encoder&) = delete;
+  Encoder& operator=(Encoder&&) = delete;
+
+  LibXR::Topic& DataTopic();
+  LibXR::Topic& SampleTopic() { return data_topic_; }
+  [[nodiscard]] const MotorData& LatestData() const { return latest_data_; }
+  void ResetAll();
   void OnMonitor() override {}
 
-private:
+ private:
+  static constexpr uint32_t kWorkerPeriodMs = 5U;
+  using WheelCounts = std::array<int32_t, kMotorCount>;
+
+  static const char* ValidateTopicName(const char* topic_name);
+  static void ThreadFunc(Encoder* self);
+
+  [[nodiscard]] WheelCounts ReadCounts() const;
+  void PublishIfDue();
+
+  std::array<Module::QuadratureDecoder, kMotorCount> decoders_;
+  float counts_per_rev_ = 0.0F;
+  uint32_t publish_period_ms_ = 5U;
+  LibXR::Topic data_topic_;
+  std::optional<WheelCounts> previous_counts_;
+  LibXR::MicrosecondTimestamp last_sample_time_{};
+  MotorData latest_data_{};
+  uint32_t sequence_ = 0U;
+  bool has_published_ = false;
+  LibXR::Thread thread_;
 };
